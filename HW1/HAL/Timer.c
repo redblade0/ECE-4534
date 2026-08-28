@@ -1,5 +1,6 @@
 #include <HAL/Timer.h>
 
+
 /*
  * Millisecond counter.
  *
@@ -16,9 +17,6 @@ static volatile uint32_t systemMillis = 0;
  */
 void TIMER_0_INST_IRQHandler(void)
 {
-    /*
-     * Check that the zero-event interrupt caused this interrupt.
-     */
     if (DL_TimerA_getPendingInterrupt(TIMER_0_INST)
             == DL_TIMERA_IIDX_ZERO)
     {
@@ -28,28 +26,63 @@ void TIMER_0_INST_IRQHandler(void)
 
 
 /*
- * Initialize and start the system timer.
+ * Initialize and start the hardware timer.
  */
 void InitSystemTiming(void)
 {
     systemMillis = 0;
 
-    /*
-     * Enable the TIMER_0 interrupt in the NVIC.
-     */
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
 
-    /*
-     * Start TIMER_0.
-     */
     DL_TimerA_startCounter(TIMER_0_INST);
 }
 
 
 /*
- * Return the number of milliseconds since the timer was started.
+ * Return the current system time in milliseconds.
  */
 uint32_t Timer_getMillis(void)
 {
     return systemMillis;
+}
+
+
+/*
+ * Construct a software timer.
+ */
+SWTimer SWTimer_construct(uint32_t waitTime_ms)
+{
+    SWTimer timer;
+
+    timer.startTime = 0;
+    timer.waitTime = waitTime_ms;
+
+    return timer;
+}
+
+
+/*
+ * Start/restart a software timer.
+ */
+void SWTimer_start(SWTimer* timer_p)
+{
+    timer_p->startTime = Timer_getMillis();
+}
+
+
+/*
+ * Determine whether a software timer has expired.
+ */
+bool SWTimer_expired(SWTimer* timer_p)
+{
+    return (Timer_getMillis() - timer_p->startTime) >= timer_p->waitTime;
+}
+
+
+/*
+ * Return the number of milliseconds elapsed since the timer started.
+ */
+uint32_t SWTimer_elapsedTimeMS(SWTimer* timer_p)
+{
+    return Timer_getMillis() - timer_p->startTime;
 }

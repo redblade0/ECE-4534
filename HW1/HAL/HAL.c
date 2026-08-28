@@ -26,11 +26,11 @@ HAL HAL_construct()
     hal.boosterpackBlue = LED_construct(GPIO_GRP_0_BOOSTERPACK_LED_BLUE_PORT, GPIO_GRP_0_BOOSTERPACK_LED_BLUE_PIN);
 
     // Initialize all Buttons by calling their constructors with correctly-defined arguments.
-    hal.boosterpackS1 = Button_construct(BOOSTERPACK_S1_PORT, BOOSTERPACK_S1_PIN);  // Boosterpack S1
-    hal.boosterpackS2 = Button_construct(BOOSTERPACK_S2_PORT, BOOSTERPACK_S2_PIN);  // Boosterpack S2
+    hal.boosterpackS1 = Button_construct(GPIOA, GPIO_GRP_0_BOOSTERPACK_BUTTON_S1_PIN);  // Boosterpack S1
+    hal.boosterpackS2 = Button_construct(GPIOA, GPIO_GRP_0_BOOSTERPACK_BUTTON_S2_PIN);  // Boosterpack S2
 
-    // Initialize the LCD by calling its constructor with user-defined foreground and background colors.
-    hal.gfx = GFX_construct(GRAPHICS_COLOR_WHITE, GRAPHICS_COLOR_BLACK);
+    // // Initialize the LCD by calling its constructor with user-defined foreground and background colors.
+    // hal.gfx = GFX_construct(GRAPHICS_COLOR_WHITE, GRAPHICS_COLOR_BLACK);
 
     // Once we have finished building the HAL, return the completed struct.
     return hal;

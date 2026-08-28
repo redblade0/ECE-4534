@@ -31,29 +31,22 @@
  */
 
 #include "ti_msp_dl_config.h"
-#include <HAL/Timer.h>
+#include "HAL/HAL.h"
 
 int main(void)
 {
     SYSCFG_DL_init();
     InitSystemTiming();
-    
-    // DL_GPIO_setPins(GPIOB, DL_GPIO_PIN_1); 
-    // DL_GPIO_setPins(GPIOA, DL_GPIO_PIN_28);
-    // DL_GPIO_setPins(GPIOA, DL_GPIO_PIN_31);
 
-    while (1) {
+    HAL hal = HAL_construct();
 
-        static uint32_t lastTime = 0;
-        
-        if(Timer_getMillis() - lastTime >= 500) {
-            lastTime = Timer_getMillis();
-
-            DL_GPIO_togglePins(
-                GPIO_GRP_0_BOOSTERPACK_LED_RED_PORT,
-                GPIO_GRP_0_BOOSTERPACK_LED_RED_PIN
-            );
+    while (1)
+    {
+        HAL_refresh(&hal);
+        if(Button_isPressed(&hal.boosterpackS2)) {
+            LED_turnOn(&hal.boosterpackBlue);
+        } else if (Button_isPressed(&hal.boosterpackS1)) {
+            LED_turnOff(&hal.boosterpackBlue);
         }
-
     }
 }

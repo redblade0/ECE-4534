@@ -38,8 +38,8 @@ struct _HAL
     Button boosterpackS1;
     Button boosterpackS2;
 
-    // // Graphics - LCD control
-    GFX gfx;
+    // // // Graphics - LCD control
+    // GFX gfx;
 };
 typedef struct _HAL HAL;
 
