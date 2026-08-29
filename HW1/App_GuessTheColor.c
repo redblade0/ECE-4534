@@ -40,6 +40,7 @@
 /* HAL and Application includes */
 #include <HAL/HAL.h>
 #include <HAL/Timer.h>
+#include <HAL/Display.h>
 #include <App_GuessTheColor.h>
 
 /**
@@ -330,9 +331,9 @@ void App_GuessTheColor_showGameScreen(App_GuessTheColor* app_p)
     Graphics_DrawString(5, 35 + (app_p->cursor * 15), ">", GRAPHICS_WHITE);
 
     // Draw the stars for LED guesses
-    if (app_p->redSelected  ) { Graphics_DrawString(45, 35, "*", GRAPHICS_WHITE); }
-    if (app_p->greenSelected) { Graphics_DrawString(45, 50, "*", GRAPHICS_WHITE); }
-    if (app_p->blueSelected ) { Graphics_DrawString(45, 65, "*", GRAPHICS_WHITE); }
+    if (app_p->redSelected  ) { Graphics_DrawString(45, 35, "  *", GRAPHICS_WHITE); }
+    if (app_p->greenSelected) { Graphics_DrawString(45, 50, "  *", GRAPHICS_WHITE); }
+    if (app_p->blueSelected ) { Graphics_DrawString(45, 65, "  *", GRAPHICS_WHITE); }
 }
 
 /**
@@ -351,9 +352,9 @@ void App_GuessTheColor_updateGameScreen(App_GuessTheColor* app_p)
     Graphics_DrawString(5, 35 + (app_p->cursor * 15), ">", GRAPHICS_WHITE);
 
     // Draw the stars for LED guesses
-    if (app_p->redSelected  ) { Graphics_DrawString(45, 35, "*", GRAPHICS_WHITE); }
-    if (app_p->greenSelected) { Graphics_DrawString(45, 50, "*", GRAPHICS_WHITE); }
-    if (app_p->blueSelected ) { Graphics_DrawString(45, 65, "*", GRAPHICS_WHITE); }
+    if (app_p->redSelected  ) { Graphics_DrawString(45, 35, "  *", GRAPHICS_WHITE); }
+    if (app_p->greenSelected) { Graphics_DrawString(45, 50, "  *", GRAPHICS_WHITE); }
+    if (app_p->blueSelected ) { Graphics_DrawString(45, 65, "  *", GRAPHICS_WHITE); }
 }
 
 /**
@@ -374,14 +375,9 @@ void App_GuessTheColor_showResultScreen(App_GuessTheColor* app_p, HAL* hal_p)
 
     // Print the correct string based on if the user won or not
     if (match) {
-        // GFX_print(&hal_p->gfx, "Right!", 2, 0);
         Graphics_DrawString(5, 40, "You Win!", GRAPHICS_WHITE);
-        // Graphics_drawImage((const Graphics_Context *)&hal_p->gfx, &happy8BPP_UNCOMP, 60, 60);
     }
     else {
-        // GFX_print(&hal_p->gfx, "Wrong!", 2, 0);
         Graphics_DrawString(5, 40, "You Lose", GRAPHICS_WHITE);
-
-        // Graphics_drawImage((const Graphics_Context *)&hal_p->gfx, &sad8BPP_UNCOMP, 60, 60);
     }
 }
