@@ -11,7 +11,6 @@
 #include <HAL/Button.h>
 #include <HAL/LED.h>
 #include <HAL/Timer.h>
-#include <HAL/Graphics.h>
 
 
 /**============================================================================
@@ -38,8 +37,6 @@ struct _HAL
     Button boosterpackS1;
     Button boosterpackS2;
 
-    // // // Graphics - LCD control
-    // GFX gfx;
 };
 typedef struct _HAL HAL;
 
