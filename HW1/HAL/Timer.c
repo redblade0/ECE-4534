@@ -17,8 +17,7 @@ static volatile uint32_t systemMillis = 0;
  */
 void TIMER_0_INST_IRQHandler(void)
 {
-    if (DL_TimerA_getPendingInterrupt(TIMER_0_INST)
-            == DL_TIMERA_IIDX_ZERO)
+    if (DL_TimerA_getPendingInterrupt(TIMER_0_INST) == DL_TIMERA_IIDX_ZERO)
     {
         systemMillis++;
     }
