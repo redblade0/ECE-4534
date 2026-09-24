@@ -8,6 +8,11 @@
 #include "ti_msp_dl_config.h"
 #include "timestamp.h"
 
+
+// #define EVENT_VARIANT 1
+#define EVENT_VARIANT 2
+// #define EVENT_VARIANT 3
+
 #define ACQ_PRIORITY 5
 #define EVENT_PRIORITY 4
 #define CTRL_PRIORITY 3
@@ -66,8 +71,6 @@ static volatile uint32_t adcDroppedSamples = 0;
 static volatile uint32_t adcSampleCount = 0;
 static volatile uint16_t lastAdcValue = 0;
 
-static SemaphoreHandle_t eventSemaphore = NULL;
-
 volatile uint32_t timerOverflowCount = 0;
 volatile uint32_t eventIsrTime = 0;
 volatile uint32_t eventIsrCount = 0;
@@ -76,7 +79,12 @@ static volatile uint32_t eventLatencyMinUs = UINT32_MAX;
 static volatile uint32_t eventLatencyMaxUs = 0;
 static volatile uint64_t eventLatencyTotalUs = 0;
 static volatile uint32_t eventLatencyCount = 0;
-static uint32_t eventLatencyHistogram[16];
+#define EVENT_LATENCY_BUCKETS 64
+#define EVENT_LATENCY_MAX_US  5000U
+
+static uint32_t eventLatencyHistogram[EVENT_LATENCY_BUCKETS];
+static SemaphoreHandle_t eventSemaphore = NULL;
+static TaskHandle_t eventTaskHandle = NULL;
 
 static volatile uint16_t controlOutput = 0;
 
@@ -97,6 +105,7 @@ static uint32_t getReleaseTime(TickType_t releaseTick)
     uint32_t systickValue;
     uint32_t systickLoad;
     uint32_t currentTickTime;
+    uint32_t tickPeriodTicks;
 
     int32_t tickDifference;
 
@@ -116,11 +125,13 @@ static uint32_t getReleaseTime(TickType_t releaseTick)
     currentTickTime =
         now - (systickLoad - systickValue);
 
+    tickPeriodTicks = systickLoad + 1U;
+
     tickDifference =
         (int32_t)(releaseTick - tick1);
 
     return currentTickTime +
-           ((int32_t)tickDifference * 32000);
+           ((uint32_t)tickDifference * tickPeriodTicks);
 }
 
 static int adcRingPush(uint16_t value, uint32_t timestamp)
@@ -171,6 +182,20 @@ static void uart_puts(const char *str)
 static uint32_t ticksToUs(uint32_t ticks)
 {
     return (ticks + 16U) / 32U;
+}
+
+static TickType_t periodMsToTicks(uint32_t periodMs)
+{
+    TickType_t ticks;
+
+    ticks = pdMS_TO_TICKS(periodMs);
+
+    if ((periodMs > 0U) && (ticks == 0U))
+    {
+        ticks = 1U;
+    }
+
+    return ticks;
 }
 
 static void statsInit(TaskStats *stats)
@@ -280,6 +305,46 @@ static void updateMax(volatile uint32_t *maxValue, uint32_t value)
     }
 }
 
+static uint32_t eventLatencyMeanUs(void)
+{
+    if (eventLatencyCount == 0)
+    {
+        return 0;
+    }
+
+    return (uint32_t)(
+        eventLatencyTotalUs / eventLatencyCount);
+}
+
+static uint32_t eventLatencyP99Us(void)
+{
+    uint32_t target;
+    uint32_t cumulative = 0;
+
+    if (eventLatencyCount == 0)
+    {
+        return 0;
+    }
+
+    target =
+        (eventLatencyCount * 99U + 99U) / 100U;
+
+    for (uint32_t i = 0;
+         i < EVENT_LATENCY_BUCKETS;
+         i++)
+    {
+        cumulative += eventLatencyHistogram[i];
+
+        if (cumulative >= target)
+        {
+            return ((i + 1U) * EVENT_LATENCY_MAX_US) /
+                   EVENT_LATENCY_BUCKETS;
+        }
+    }
+
+    return EVENT_LATENCY_MAX_US;
+}
+
 static uint32_t getTotalUtilizationX100(void)
 {
     uint64_t utilization;
@@ -324,26 +389,39 @@ void TIMA1_IRQHandler(void)
 
 void TIMA0_IRQHandler(void)
 {
+    uint32_t isrEntryTime = ts_now();
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
     if (DL_TimerA_getPendingInterrupt(TIMER_1_INST)
         == DL_TIMER_IIDX_ZERO)
     {
-        eventIsrTime = ts_now();
+        eventIsrTime = isrEntryTime;
         eventIsrCount++;
 
-        xSemaphoreGiveFromISR(
-            eventSemaphore,
-            &xHigherPriorityTaskWoken);
+    #if EVENT_VARIANT == 3
+            vTaskNotifyGiveFromISR(
+                eventTaskHandle,
+                &xHigherPriorityTaskWoken);
+    #else
+            xSemaphoreGiveFromISR(
+                eventSemaphore,
+                &xHigherPriorityTaskWoken);
+    #endif
 
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-    }
+    #if EVENT_VARIANT != 2
+            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    #endif
+        }
 }
 
 static void AcqTask(void *pvParameters)
 {
     TickType_t lastWakeTime;
     TickType_t releaseTick;
+    TickType_t acqPeriodTicks;
+
+    lastWakeTime = xTaskGetTickCount();
+    acqPeriodTicks = periodMsToTicks(ACQ_PERIOD_MS);
 
     (void)pvParameters;
 
@@ -403,7 +481,7 @@ static void AcqTask(void *pvParameters)
 
         vTaskDelayUntil(
             &lastWakeTime,
-            pdMS_TO_TICKS(ACQ_PERIOD_MS));
+            acqPeriodTicks);
     }
 }
 
@@ -422,9 +500,15 @@ static void EventTask(void *pvParameters)
         uint32_t latencyBucket;
         volatile uint32_t dummy = 0;
 
+        #if EVENT_VARIANT == 3
+        ulTaskNotifyTake(
+            pdTRUE,
+            portMAX_DELAY);
+        #else
         xSemaphoreTake(
             eventSemaphore,
             portMAX_DELAY);
+        #endif
 
         releaseTime = eventIsrTime;
         startTime = ts_now();
@@ -444,11 +528,13 @@ static void EventTask(void *pvParameters)
         eventLatencyTotalUs += latencyUs;
         eventLatencyCount++;
 
-        latencyBucket = (latencyUs * 16U) / 5000U;
+        latencyBucket =
+            (latencyUs * EVENT_LATENCY_BUCKETS) /
+            EVENT_LATENCY_MAX_US;
 
-        if (latencyBucket >= 16U)
+        if (latencyBucket >= EVENT_LATENCY_BUCKETS)
         {
-            latencyBucket = 15U;
+            latencyBucket = EVENT_LATENCY_BUCKETS - 1U;
         }
 
         eventLatencyHistogram[latencyBucket]++;
@@ -476,6 +562,10 @@ static void CtrlTask(void *pvParameters)
 {
     TickType_t lastWakeTime;
     TickType_t releaseTick;
+    TickType_t ctrlPeriodTicks;
+
+    lastWakeTime = xTaskGetTickCount();
+    ctrlPeriodTicks = periodMsToTicks(CTRL_PERIOD_MS);
 
     (void)pvParameters;
 
@@ -544,7 +634,7 @@ static void CtrlTask(void *pvParameters)
 
         vTaskDelayUntil(
             &lastWakeTime,
-            pdMS_TO_TICKS(CTRL_PERIOD_MS));
+            ctrlPeriodTicks);
     }
 }
 
@@ -552,6 +642,9 @@ static void UiTask(void *pvParameters)
 {
     TickType_t lastWakeTime;
     TickType_t releaseTick;
+    TickType_t uiPeriodTicks;
+
+    uiPeriodTicks = periodMsToTicks(UI_PERIOD_MS);
 
     uint8_t previousButton = 0;
     uint8_t stableButton = 0;
@@ -634,7 +727,7 @@ static void UiTask(void *pvParameters)
 
         vTaskDelayUntil(
             &lastWakeTime,
-            pdMS_TO_TICKS(UI_PERIOD_MS));
+            uiPeriodTicks);
     }
 }
 
@@ -665,10 +758,91 @@ static void logHistogram(const char *taskName, const TaskStats *stats)
 
 }
 
+static void logEventLatency(void)
+{
+    char buffer[96];
+
+    uint32_t count;
+    uint32_t minUs;
+    uint32_t maxUs;
+    uint32_t isrCount;
+    uint64_t totalUs;
+    uint32_t histogram[64];
+
+    taskENTER_CRITICAL();
+
+    count = eventLatencyCount;
+    minUs = eventLatencyMinUs;
+    maxUs = eventLatencyMaxUs;
+    totalUs = eventLatencyTotalUs;
+    isrCount = eventIsrCount;
+
+    for (uint32_t i = 0; i < 64U; i++)
+    {
+        histogram[i] = eventLatencyHistogram[i];
+    }
+
+    taskEXIT_CRITICAL();
+
+    uint32_t meanUs = 0;
+    uint32_t p99Us = 0;
+
+    if (count > 0U)
+    {
+        meanUs = (uint32_t)(totalUs / count);
+
+        uint32_t target =
+            (count * 99U + 99U) / 100U;
+
+        uint32_t cumulative = 0;
+
+        for (uint32_t i = 0; i < 64U; i++)
+        {
+            cumulative += histogram[i];
+
+            if (cumulative >= target)
+            {
+                p99Us =
+                    ((i + 1U) * 5000U) / 64U;
+                break;
+            }
+        }
+    }
+
+    snprintf(
+        buffer,
+        sizeof(buffer),
+        "LATENCY,EVENT,%lu,%lu,%lu,%lu,%lu,%lu\r\n",
+        (unsigned long)count,
+        (unsigned long)minUs,
+        (unsigned long)maxUs,
+        (unsigned long)meanUs,
+        (unsigned long)p99Us,
+        (unsigned long)isrCount);
+
+    uart_puts(buffer);
+
+    for (uint32_t i = 0; i < 64U; i++)
+    {
+        snprintf(
+            buffer,
+            sizeof(buffer),
+            "LATENCY_HIST,EVENT,%lu,%lu\r\n",
+            (unsigned long)i,
+            (unsigned long)histogram[i]);
+
+        uart_puts(buffer);
+    }
+}
+
 static void LogTask(void *pvParameters)
 {
     TickType_t lastWakeTime;
     TickType_t releaseTick;
+    TickType_t logPeriodTicks;
+
+    lastWakeTime = xTaskGetTickCount();
+    logPeriodTicks = periodMsToTicks(LOG_PERIOD_MS);
 
     char buffer[256];
     uint8_t histogramDumped = 0;
@@ -774,12 +948,14 @@ static void LogTask(void *pvParameters)
         {
             logHistogram("ACQ", &acqStats);
             logHistogram("CTRL", &ctrlStats);
+            logEventLatency();
+
             histogramDumped = 1U;
         }
 
         vTaskDelayUntil(
             &lastWakeTime,
-            pdMS_TO_TICKS(LOG_PERIOD_MS));
+            logPeriodTicks);
     }
 
 }
@@ -795,6 +971,16 @@ int main(void)
     statsInit(&logStats);
 
     uart_puts("STARTING FIVE TASK SYSTEM\r\n");
+
+    char variantBuffer[64];
+
+    snprintf(
+        variantBuffer,
+        sizeof(variantBuffer),
+        "EVENT_VARIANT,%d\r\n",
+        EVENT_VARIANT);
+
+    uart_puts(variantBuffer);
 
     NVIC_SetPriority(
         TIMER_0_INST_INT_IRQN,
@@ -833,7 +1019,7 @@ int main(void)
         512,
         NULL,
         EVENT_PRIORITY,
-        NULL);
+        &eventTaskHandle);
 
     xTaskCreate(
         CtrlTask,
