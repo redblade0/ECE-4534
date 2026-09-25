@@ -9,8 +9,8 @@
 #include "timestamp.h"
 
 
-// #define EVENT_VARIANT 1
-#define EVENT_VARIANT 2
+#define EVENT_VARIANT 1
+// #define EVENT_VARIANT 2
 // #define EVENT_VARIANT 3
 
 #define ACQ_PRIORITY 5
@@ -960,9 +960,42 @@ static void LogTask(void *pvParameters)
 
 }
 
+static void measureTsNowOverhead(void)
+{
+    uint32_t minTicks = UINT32_MAX;
+    uint32_t start;
+    uint32_t end;
+    uint32_t delta;
+    char buffer[64];
+
+    for (uint32_t i = 0; i < 1000U; i++)
+    {
+        start = ts_now();
+        end = ts_now();
+
+        delta = end - start;
+
+        if (delta < minTicks)
+        {
+            minTicks = delta;
+        }
+    }
+
+    snprintf(
+        buffer,
+        sizeof(buffer),
+        "TS_NOW_OVERHEAD,%lu ticks,%lu us\r\n",
+        (unsigned long)minTicks,
+        (unsigned long)((minTicks + 16U) / 32U));
+
+    uart_puts(buffer);
+}
+
 int main(void)
 {
     prvSetupHardware();
+
+    measureTsNowOverhead();
 
     statsInit(&acqStats);
     statsInit(&eventStats);
@@ -1047,6 +1080,7 @@ int main(void)
 
     DL_TimerA_startCounter(TIMER_0_INST);
     DL_TimerA_startCounter(TIMER_1_INST);
+    measureTsNowOverhead();
 
     vTaskStartScheduler();
 
