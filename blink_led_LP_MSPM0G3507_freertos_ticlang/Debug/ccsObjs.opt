@@ -1,9 +1,0 @@
-"./ti_msp_dl_config.o"
-"./main-blinky.o"
-"./main.o"
-"./timestamp.o"
-"./freertos/ticlang/startup_mspm0g350x_ticlang.o"
-"../mspm0g3507.cmd"
--lfreertos_builds_LP_MSPM0G3507_release_ticlang.lib
--l"C:/ti/mspm0_sdk_2_11_00_07/source/ti/driverlib/lib/ticlang/m0p/mspm0g1x0x_g3x0x/driverlib.a"
--llibc.a
