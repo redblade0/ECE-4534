@@ -1,0 +1,185 @@
+%%{
+/*
+ * Copyright (c) 2026, Texas Instruments Incorporated - http://www.ti.com
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * *  Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * *  Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * *  Neither the name of Texas Instruments Incorporated nor the names of
+ *    its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
+
+/*
+ *  ======== SD24.Board.c.xdt ========
+ */
+    /* args[] passed by /ti/drivers/templates/Board.c.xdt during function call: */
+    let SD24 = args[0];
+    let content = args[1];
+    let Common = system.getScript("/ti/driverlib/Common.js");
+
+    /* shorthand names for some common references in template below */
+    let instances = SD24.$instances;
+    if (instances.length == 0) return;
+
+    /*
+     * Standard Trampoline:
+     * In order to preserve spacing, it is important to also set the boolean
+     * values in the templates object based on whether that condition should
+     * produce any code
+     * Example:
+     * templates: {
+     *       boardc: "/ti/driverlib/comp/COMP.Board.c.xdt",
+     *       boardh: "/ti/driverlib/comp/COMP.Board.h.xdt",
+     *       Call: true,
+     *       Reset: false,
+     *       Power: true,
+     *       GPIO: false,
+     *       Function: true
+     * },
+     */
+
+    switch(content) {
+        case "Call":
+            printCall();
+            break;
+        case "Reset":
+            printReset();
+            break;
+        case "Power":
+            printPower();
+            break;
+        case "GPIO":
+            printGPIO();
+            break;
+        case "Function":
+            printFunction();
+            break;
+        default:
+            /* do nothing */
+            break;
+    }
+
+%%}
+%
+% function printCall() {
+% for(let inst of instances){
+    SYSCFG_DL_`inst.$name`_init();
+%   }
+% }
+%
+% function printReset() {
+%   for(let inst of instances) {
+%   let instName = inst.$name + "_INST";
+    DL_SD24_reset(`instName`);
+%   }
+% }
+%
+% function printPower() {
+%   for(let inst of instances) {
+%   let instName = inst.$name + "_INST";
+    DL_SD24_enablePower(`instName`);
+%   }
+% }
+%
+% function printGPIO() {
+% /* Not applicable to SD24 */
+% }
+%
+% /* Main Function */
+% function printFunction() {
+%   for(let inst of instances) {
+%   let instName = inst.$name + "_INST";
+%   let sleepMode = "STOP"
+%   if(inst.sleepMode) {
+%       sleepMode = "RUN"
+%   }
+static const DL_SD24_ClockConfig g`inst.$name`ClockConfig = {
+    .osr        = DL_SD24_CLOCK_OSR_`inst.clockOSR`,
+    .powerMode  = DL_SD24_CLOCK_POWER_`inst.clockPowerMode`,
+};
+static const DL_SD24_CurrentDetectConfig g`inst.$name`CurrentDetectConfig = {
+    .currentDetectNumberThresholds  = `inst.cdNumberThresholds`,
+    .currentDetectMeasurementLength = `inst.cdMeasurementLength`,
+    .currentDetectChannelSelection  = DL_SD24_CURRENT_DETECT_CHANNEL_`inst.cdChannelSelection`,
+};
+SYSCONFIG_WEAK void SYSCFG_DL_`inst.$name`_init(void)
+{
+    DL_SD24_init(`instName`);
+
+%   let channelMask = 0;
+%   for(let ch of inst.enabledChannels) { channelMask |= (1 << parseInt(ch)); }
+    DL_SD24_setClockConfig(`instName`, (DL_SD24_ClockConfig *) &g`inst.$name`ClockConfig);
+    DL_SD24_setChannelEnableMask(`instName`, 0x`channelMask.toString(16).padStart(2, "0").toUpperCase()`);
+    DL_SD24_setDrdySel(`instName`, DL_SD24_MODE_DRDY_SEL_`inst.drdySel`);
+%   if(inst.enableExternalReference){
+    DL_SD24_enableExternalReference(`instName`);
+%   } else {
+    DL_SD24_disableExternalReference(`instName`);
+%   }
+    DL_SD24_setDCBlockFilterValue(`instName`, `inst.dcBlockFilterValue`);
+%   if(inst.configureCurrentDetect){
+%   if(inst.enableCurrentDetect){
+    DL_SD24_enableCurrentDetect(`instName`);
+%   } else {
+    DL_SD24_disableCurrentDetect(`instName`);
+%   }
+    DL_SD24_setCurrentDetectConfig(`instName`, (DL_SD24_CurrentDetectConfig *) &g`inst.$name`CurrentDetectConfig);
+    DL_SD24_setCurrentDetectThreshold(`instName`, `inst.currentDetectThreshold`);
+%   }
+%   if(inst.configureGlobalChop){
+%   if(inst.enableGlobalChop){
+    DL_SD24_enableGlobalChop(`instName`);
+%   } else {
+    DL_SD24_disableGlobalChop(`instName`);
+%   }
+    DL_SD24_setGlobalChopDelay(`instName`, DL_SD24_GLOBAL_CHOP_DELAY_`inst.globalChopDelay`);
+%   }
+%   for(let i in inst.enabledChannels){
+%       let chanIdx = inst.enabledChannels[i];
+%       let chanInst = inst["SD24_CHANNEL_"+chanIdx];
+%   if(chanInst.pgaGain !== "1"){
+    DL_SD24_setChannelPGAGain(`instName`, DL_SD24_CHANNEL_`chanIdx`, DL_SD24_CHANNEL_PGA_GAIN_`chanInst.pgaGain`);
+%   }
+%   if(chanInst.offsetCalibration !== 0){
+    DL_SD24_setChannelOffsetCalibration(`instName`, DL_SD24_CHANNEL_`chanIdx`, `chanInst.offsetCalibration`);
+%   }
+%   if(chanInst.gainCalibration !== 0){
+    DL_SD24_setChannelGainCalibration(`instName`, DL_SD24_CHANNEL_`chanIdx`, `chanInst.gainCalibration`);
+%   }
+%   if(chanInst.inputMux !== "DIFFERENTIAL"){
+    DL_SD24_setChannelInputMux(`instName`, DL_SD24_CHANNEL_`chanIdx`, DL_SD24_CHANNEL_INPUT_MUX_`chanInst.inputMux`);
+%   }
+%   if(chanInst.phase !== 0){
+    DL_SD24_setChannelPhase(`instName`, DL_SD24_CHANNEL_`chanIdx`, `chanInst.phase`);
+%   }
+%   if(chanInst.dcBlockDisable){
+    DL_SD24_setChannelDCBlockDisable(`instName`, DL_SD24_CHANNEL_`chanIdx`, true);
+%   }
+%   } // for(let i in inst.enabledChannels)
+}
+%   } // end of for inst in instances
+%
+% } // printFunction()

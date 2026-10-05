@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+Board/.workspace/
+Board/firmware/generated/
+Board/firmware/build/
+Board/firmware/ccs-project/
+# Keep your real artifacts/ recordings, models and final results for submission.
