@@ -28,14 +28,18 @@ def main():
     frontend = args.frontend.resolve().read_bytes()
     class Handler(BaseHTTPRequestHandler):
         def reply(self, status, data, content_type='application/json'):
-            if content_type == 'application/json':
-                data = json.dumps(data, allow_nan=False).encode('utf-8')
-            self.send_response(status)
-            self.send_header('Content-Type', content_type)
-            self.send_header('Content-Length', str(len(data)))
-            self.send_header('Cache-Control', 'no-store')
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                if content_type == 'application/json':
+                    data = json.dumps(data, allow_nan=False).encode('utf-8')
+                self.send_response(status)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(data)
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
+
 
         def do_GET(self):
             if self.path == '/':
@@ -43,6 +47,10 @@ def main():
             elif self.path == '/api/state':
                 try:
                     self.reply(200, backend.snapshot())
+                except (ConnectionAbortedError, BrokenPipeError):
+                    return
+                except (ConnectionAbortedError, BrokenPipeError):
+                    return
                 except Exception:
                     traceback.print_exc()
                     self.reply(500, {'error': 'Backend snapshot failed; inspect terminal'})
@@ -72,6 +80,10 @@ def main():
                 self.reply(501, {'error': str(error)})
             except (ValueError, RuntimeError, KeyError) as error:
                 self.reply(400, {'error': str(error)})
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
+            except (ConnectionAbortedError, BrokenPipeError):
+                return
             except Exception:
                 traceback.print_exc()
                 self.reply(500, {'error': 'Backend action failed; inspect terminal'})

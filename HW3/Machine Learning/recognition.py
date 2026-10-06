@@ -634,6 +634,8 @@ def save_evaluation_plots(results, output_dir):
     Save the required movement-model comparison plot plus both confusion
     matrices. Each plot is generated from the frozen evaluation results.
     """
+    import matplotlib
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     output_dir = Path(output_dir)
@@ -765,41 +767,44 @@ def evaluate_models(evaluation_trials, bundle):
         position_label = trial["position"]
         motion_label = trial["motion"]
 
-        # Position: average predictions over five-sample windows.
-        position_predictions = []
+        # Position evaluation: ONLY the nine held-position evaluation
+        # recordings. The four movement recordings are not position tests;
+        # their backend position label is "center" only for bookkeeping.
+        if motion_label == "still":
+            position_predictions = []
 
-        for window in _position_windows(xy):
-            features = position_features(window)
+            for window in _position_windows(xy):
+                features = position_features(window)
 
-            scaled = bundle["position"][
-                "scaler"
-            ].transform(
-                features.reshape(1, -1)
-            )
-
-            prediction = bundle["position"][
-                "model"
-            ].predict(scaled)[0]
-
-            position_predictions.append(
-                prediction
-            )
-
-        if position_predictions:
-            counts = {}
-
-            for prediction in position_predictions:
-                counts[prediction] = (
-                    counts.get(prediction, 0) + 1
+                scaled = bundle["position"][
+                    "scaler"
+                ].transform(
+                    features.reshape(1, -1)
                 )
 
-            final_position = max(
-                counts,
-                key=counts.get,
-            )
+                prediction = bundle["position"][
+                    "model"
+                ].predict(scaled)[0]
 
-            position_true.append(position_label)
-            position_pred.append(final_position)
+                position_predictions.append(
+                    prediction
+                )
+
+            if position_predictions:
+                counts = {}
+
+                for prediction in position_predictions:
+                    counts[prediction] = (
+                        counts.get(prediction, 0) + 1
+                    )
+
+                final_position = max(
+                    counts,
+                    key=counts.get,
+                )
+
+                position_true.append(position_label)
+                position_pred.append(final_position)
 
         # Motion: evaluate each two-second window.
         for window in _motion_windows(xy, MOTION_EVAL_STRIDE):

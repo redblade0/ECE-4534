@@ -13,6 +13,7 @@ from collections import deque
 import csv
 import json
 import math
+import shutil
 import time
 import uuid
 import joblib
@@ -70,6 +71,7 @@ class Backend:
 
         self.trials = []
         self.model_bundle = None
+        self.evaluation_results = None
 
         self.capture_cancel = False
 
@@ -81,6 +83,9 @@ class Backend:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self._load_calibration()
+        self._load_model()
+        if not self._load_latest_validation_session():
+            self._load_latest_training_session()
 
         self.reader = SerialReader(
             self.port,
@@ -123,6 +128,19 @@ class Backend:
     def snapshot(self):
         with self.lock:
             state = deepcopy(self.state)
+
+            # Explicit readiness flag for the supplied dashboard. This is
+            # derived from the actual recovered validation session/trials,
+            # rather than relying only on state['session'].
+            validation_trials = [
+                t for t in self.trials
+                if t.get('accepted', False)
+            ] if self.session_split == 'validation' else []
+            state['evaluation_ready'] = (
+                self.model_bundle is not None
+                and self.session_split == 'validation'
+                and len(validation_trials) == len(BEHAVIORS)
+            )
 
         if (
             self.last_sample_time is not None
@@ -228,7 +246,14 @@ class Backend:
             else:
                 self.state['message'] = 'Receiving joystick data'
 
-            if self.model_bundle is not None:
+            # While recording a calibration/training/evaluation trial, give
+            # capture and serial acquisition priority. The live cursor still
+            # updates every incoming sample, but ML inference is paused until
+            # the capture finishes. This prevents model CPU work from making
+            # the six-second required recording feel laggy.
+            capture_active = self.state.get('job') is not None
+
+            if self.model_bundle is not None and not capture_active:
                 self.live_prediction_counter += 1
 
                 # Assignment requirement: trigger a new prediction every
@@ -272,6 +297,10 @@ class Backend:
             except Exception as error:
                 with self.lock:
                     if request_id == self.prediction_request_id:
+                        self.state['result'] = {
+                            'position': 'prediction error',
+                            'motion': 'prediction error',
+                        }
                         self.state['message'] = f'Live prediction error: {error}'
                 continue
 
@@ -305,6 +334,133 @@ class Backend:
 
             if 'rate' in status:
                 self.state['rate'] = status['rate']
+
+    def _load_model(self):
+        """Load the frozen model artifact so restart does not lose Step 9/11 state."""
+        path = self.data_dir / 'model.joblib'
+        if not path.exists():
+            return
+
+        try:
+            bundle = joblib.load(path)
+            if not isinstance(bundle, dict):
+                return
+
+            # Live inference processes one sample at a time. Keep the fitted
+            # forest intact, but avoid joblib process/thread dispatch overhead.
+            ordered = bundle.get('motion_ordered', {}).get('model')
+            if ordered is not None and hasattr(ordered, 'n_jobs'):
+                ordered.n_jobs = 1
+
+            with self.lock:
+                self.model_bundle = bundle
+                self.state['model'] = {
+                    'trials': bundle.get('metadata', {}).get('training_trials', 0),
+                    'artifact': str(path),
+                    'version': bundle.get('version', 1),
+                }
+                self.state['message'] = 'Model loaded'
+        except Exception:
+            # A corrupt/incompatible old artifact should not prevent the
+            # board dashboard from starting. Training can create a new one.
+            return
+
+
+    def _load_latest_validation_session(self):
+        """Recover the newest saved validation session across backend restarts."""
+        return self._load_latest_session_for_split('validation')
+
+    def _load_latest_training_session(self):
+        """Recover the newest saved training session across backend restarts."""
+        self._load_latest_session_for_split('train')
+
+    def _load_latest_session_for_split(self, split):
+        root = self.data_dir / 'data' / split
+        if not root.exists():
+            return False
+
+        candidates = sorted(
+            (p for p in root.iterdir() if p.is_dir()),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+
+        for session_dir in candidates:
+            manifest_path = session_dir / 'manifest.json'
+            if not manifest_path.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                if manifest.get('split') != split:
+                    continue
+
+                all_trials = [dict(t) for t in manifest.get('trials', [])]
+                accepted_trials = [t for t in all_trials if t.get('accepted', False)]
+                if any(not (session_dir / str(t.get('csv', ''))).is_file()
+                       for t in accepted_trials):
+                    continue
+
+                accepted_labels = {t.get('behavior') for t in accepted_trials}
+                completed = all(label in accepted_labels for label in BEHAVIORS)
+                next_label = None if completed else next(
+                    (label for label in BEHAVIORS if label not in accepted_labels), None
+                )
+
+                self.session_split = split
+                self.session_id = session_dir.name
+                self.session_labels = list(BEHAVIORS)
+                self.session_saved = len(accepted_trials)
+                self.session_index = len(accepted_trials)
+                self.trials = all_trials
+
+                self.state['session'] = {
+                    'split': split,
+                    'saved': len(accepted_trials),
+                    'total': len(BEHAVIORS),
+                    'completed': completed,
+                    'next': next_label,
+                }
+
+                if split == 'validation':
+                    results_path = self.data_dir / 'evaluation.json'
+                    result_session = None
+                    if results_path.exists():
+                        try:
+                            result_session = json.loads(
+                                results_path.read_text(encoding='utf-8')
+                            ).get('session_id')
+                        except Exception:
+                            result_session = None
+                    self.state['sealed'] = bool(completed and result_session == self.session_id)
+                    self.state['evaluation'] = None
+                    if self.state['sealed'] and results_path.exists():
+                        try:
+                            self.evaluation_results = json.loads(
+                                results_path.read_text(encoding='utf-8')
+                            )
+                            self.state['evaluation'] = self.evaluation_results
+                        except Exception:
+                            self.evaluation_results = None
+
+                    self.state['message'] = (
+                        'Final evaluation loaded'
+                        if self.state['sealed']
+                        else ('Evaluation round loaded; ready to evaluate'
+                              if completed else
+                              f'Incomplete evaluation round loaded; next: {next_label}')
+                    )
+                else:
+                    self.state['sealed'] = False
+                    self.state['message'] = (
+                        'Training round loaded; ready to train'
+                        if completed else
+                        f'Incomplete training round loaded; next: {next_label}'
+                    )
+                return True
+            except Exception:
+                continue
+        return False
+
 
     def calibrate(self, payload):
         label = payload.get('label')
@@ -747,13 +903,42 @@ class Backend:
             if self.state['job'] is not None:
                 raise RuntimeError('Another operation is already running')
 
-            if self.state['session'] is not None:
-                raise RuntimeError('A session is already active')
-
             if split == 'validation' and self.state['model'] is None:
                 raise RuntimeError(
                     'A trained model is required before validation'
                 )
+
+            # A completed training session may be followed by validation,
+            # and a completed/previously evaluated validation round may be
+            # replaced when the user needs to redo the held-out test.
+            # Never discard the old CSV files; each round gets a new folder.
+            current_session = self.state.get('session')
+            if current_session is not None and not current_session.get('completed', False):
+                raise RuntimeError('A session is already active')
+
+            if split == 'train' and self.state['model'] is not None:
+                raise RuntimeError('The model is already trained; do not retrain during evaluation.')
+
+            if split == 'validation':
+                old_results = self.data_dir / 'evaluation.json'
+                if old_results.exists():
+                    archived = self.data_dir / (
+                        f'evaluation_previous_{time.strftime("%Y%m%d_%H%M%S")}.json'
+                    )
+                    try:
+                        old_results.replace(archived)
+                    except OSError:
+                        # The old result may be open in an editor/viewer. Copy it
+                        # instead so starting a fresh evaluation is never blocked.
+                        try:
+                            shutil.copy2(old_results, archived)
+                        except OSError:
+                            pass
+                    self.evaluation_results = None
+
+                self.state['sealed'] = False
+                self.evaluation_results = None
+                self.state['evaluation'] = None
 
             self.session_split = split
             self.session_id = (
@@ -821,6 +1006,16 @@ class Backend:
 
     def _record_worker(self, label):
         try:
+            # Brief non-recording preparation period. The assignment still uses
+            # its required three-second countdown followed by exactly 300
+            # accepted samples; this simply gives the user a moment to get the
+            # joystick into position before the countdown starts.
+            with self.lock:
+                self.state['message'] = (
+                    f'Get ready for {label}; recording begins after the countdown.'
+                )
+            time.sleep(1.5)
+
             self._countdown(
                 'trial',
                 label,
@@ -1108,6 +1303,10 @@ class Backend:
                 calibration,
             )
 
+            ordered_model = bundle.get('motion_ordered', {}).get('model')
+            if ordered_model is not None and hasattr(ordered_model, 'n_jobs'):
+                ordered_model.n_jobs = 1
+
             bundle['calibration'] = calibration
 
             model_path = self.data_dir / 'model.joblib'
@@ -1147,15 +1346,29 @@ class Backend:
                 )
 
             session = self.state['session']
+            validation_trials = [
+                dict(trial)
+                for trial in self.trials
+                if trial.get('accepted', False)
+            ] if self.session_split == 'validation' else []
 
-            if (
-                session is None
-                or session['split'] != 'validation'
-                or not session['completed']
-            ):
+            # Prefer the explicit internal session/trial state. This also
+            # works after a restart when the validation round was recovered
+            # from manifest.json.
+            validation_ready = (
+                self.model_bundle is not None
+                and self.session_split == 'validation'
+                and self.session_id is not None
+                and len(validation_trials) == len(BEHAVIORS)
+            )
+
+            if not validation_ready:
                 raise RuntimeError(
                     'Complete the 13-sample evaluation round first'
                 )
+
+            if self.state.get('busy'):
+                raise RuntimeError('Evaluation is already running')
 
             evaluation_trials = [
                 dict(trial)
@@ -1171,32 +1384,41 @@ class Backend:
 
             session_id = self.session_id
             bundle = self.model_bundle
+            session_dir = (
+                self.data_dir
+                / 'data'
+                / 'validation'
+                / session_id
+            )
+
+            for trial in evaluation_trials:
+                trial['_csv_path'] = session_dir / trial['csv']
 
             self.state['busy'] = True
             self.state['message'] = 'Evaluating frozen model...'
 
-        session_dir = (
-            self.data_dir
-            / 'data'
-            / 'validation'
-            / session_id
-        )
-
-        for trial in evaluation_trials:
-            trial['_csv_path'] = (
-                session_dir / trial['csv']
+        try:
+            self._start_worker(
+                self._evaluate_worker,
+                evaluation_trials,
+                bundle,
+                session_id,
             )
+        except Exception:
+            with self.lock:
+                self.state['busy'] = False
+            raise
 
+    def _evaluate_worker(self, evaluation_trials, bundle, session_id):
         try:
             results = evaluate_models(
                 evaluation_trials,
                 bundle,
             )
 
+            results['model_version'] = bundle.get('version', 1)
             results['session_id'] = session_id
-            results['evaluated_trials'] = len(
-                evaluation_trials
-            )
+            results['evaluated_trials'] = len(evaluation_trials)
             results['training_artifact'] = str(
                 self.data_dir / 'model.joblib'
             )
@@ -1207,28 +1429,26 @@ class Backend:
             )
             results.update(plot_paths)
 
-            results_path = (
-                self.data_dir
-                / 'evaluation.json'
-            )
-
+            results_path = self.data_dir / 'evaluation.json'
             results_path.write_text(
-                json.dumps(
-                    results,
-                    indent=2,
-                ),
+                json.dumps(results, indent=2),
                 encoding='utf-8',
             )
 
             with self.lock:
+                self.evaluation_results = results
+                # Add an optional state field for dashboards/reporting tools.
+                self.state['evaluation'] = results
                 self.state['sealed'] = True
                 self.state['busy'] = False
                 self.state['message'] = (
                     'Final evaluation complete'
                 )
 
-        except Exception:
+        except Exception as error:
             with self.lock:
                 self.state['busy'] = False
+                self.state['message'] = f'Evaluation failed: {error}'
+            # Re-raise so the traceback is visible in the backend terminal.
             raise
 
